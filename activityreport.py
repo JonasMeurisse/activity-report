@@ -112,11 +112,29 @@ def add_info(worksheet, name, time, start, obs):
                                                             end_type='max', end_value=None, end_color='F8696B'))
 
 
+# Fills out empty months (months with no sessions)
+def fill_empty_months(worksheet, current_month_row, start_date, end_date, ignore_first=False, ignore_last=False):
+    ym_start = (12 * start_date.year) + start_date.month + (1 if ignore_first else 0)
+    ym_end = (12 * end_date.year) + end_date.month + (0 if ignore_last else 1)
+    if ym_end - ym_start > 0:
+        for ym in range(ym_start, ym_end):
+            current_month_row += 7
+            current_year, current_month = divmod(ym, 12)
+            if current_month == 0:
+                current_month = 12
+                current_year -= 1
+            init_month(worksheet, current_year, current_month, current_month_row)
+            set_month_time(worksheet, current_month_row, 0)
+    return current_month_row
+
+
 # Processes the session data
 def process_sessions(worksheet, data, name, start_date):
-    current_month = 0
+    prev_date = 0
     current_month_row = 5
     current_month_time = 0
+
+    start_date = datetime.strptime(start_date, '%Y-%m-%d')
 
     total_time = 0
     i = 0
@@ -126,14 +144,27 @@ def process_sessions(worksheet, data, name, start_date):
         time_start = datetime.strptime(session['date'], '%Y-%m-%d %H:%M:%S')
         time_end = datetime.strptime(session['lastupd'], '%Y-%m-%d %H:%M:%S')
 
-        if time_start.month != current_month:
-            if current_month != 0:
-                set_month_time(worksheet, current_month_row, current_month_time)
+        if prev_date == 0:
+            # On first session in data: fill empty months between starting period date and first session date
+            current_month_row = fill_empty_months(worksheet, current_month_row, start_date, time_start, ignore_first=False, ignore_last=True)
             current_month_row += 7
-            current_month = time_start.month
-            current_year = time_start.year
-            init_month(worksheet, current_year, current_month, current_month_row)
+            prev_date = time_start
+            init_month(worksheet, prev_date.year, prev_date.month, current_month_row)
             current_month_time = 0
+        else:
+            if time_start.month != prev_date.month or time_start.year != prev_date.year:
+                if prev_date == 0:
+                    # On first session in data: fill empty months between starting period date and first session date
+                    current_month_row = fill_empty_months(worksheet, current_month_row, start_date, time_start)
+                else:
+                    set_month_time(worksheet, current_month_row, current_month_time)
+
+                # Fill empty months between current and previous session
+                current_month_row = fill_empty_months(worksheet, current_month_row, prev_date, time_start, ignore_first=True, ignore_last=True)
+                current_month_row += 7
+                prev_date = time_start
+                init_month(worksheet, prev_date.year, prev_date.month, current_month_row)
+                current_month_time = 0
         daily_to_xls(worksheet, time_start.day, current_month_row)
         current_month_time += int(session['time'])
 
@@ -142,6 +173,10 @@ def process_sessions(worksheet, data, name, start_date):
         counter_add(interval_counter, time_start.hour, time_start.minute, time_end.hour, time_end.minute)
 
     set_month_time(worksheet, current_month_row, current_month_time)
+
+    # Fill empty months from last session date until current date
+    fill_empty_months(worksheet, current_month_row, prev_date, datetime.now(), ignore_first=True, ignore_last=False)
+
     counter_write(worksheet, interval_counter)
     add_info(worksheet, name, total_time, start_date, len(data))
 
